@@ -1,0 +1,35 @@
+from pydantic import BaseModel
+from datetime import datetime
+from typing import Any, Dict, Optional
+
+class Sale(BaseModel):
+    name: str
+
+    active: bool
+    started_at: datetime
+    ended_at: datetime
+    summary: bool
+    code: Optional[str] = None
+    isProduct: bool
+
+    priority: int
+    discount: int
+    condition: list[Dict[str, Any]]
+
+class User(BaseModel):
+    name: str
+    region: str
+    status: str
+
+class Product(BaseModel):
+    name: str
+    price: float
+    card_price: float
+    category: str
+
+class SaleQuery(BaseModel):
+    user_id: int
+    product_id: list[Dict[str, Any]]
+    promocode: str
+    partner_card: bool
+    ball: int
