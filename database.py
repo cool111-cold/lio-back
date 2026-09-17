@@ -59,6 +59,38 @@ class ProductDB(Base):
     card_price = Column(Float)
     category = Column(String)
 
+# links
+
+class BaseLinks(Base):
+    __tablename__ = "base_links"
+    id = Column(Integer, primary_key=True)
+    name = Column(String)
+    src = Column(String)
+    label = Column(String)
+
+class LinksDB(Base):
+    __tablename__ = "links"
+    id = Column(Integer, primary_key=True)
+    icon = Column(String)
+    link = Column(String)
+    label = Column(String)
+    store_id = Column(Integer)
+
+class StoreDB(Base):
+    __tablename__ = "stores"
+    id = Column(Integer, primary_key=True)
+    title = Column(String)
+    subtitle = Column(String)
+    image = Column(String)
+    client_id = Column(Integer)
+
+class ClientsDB(Base):
+    __tablename__ = "clients"
+    id = Column(Integer, primary_key=True)
+    mail = Column(String, nullable=True)
+    login = Column(String)
+    password = Column(String)
+
 
 
 Base.metadata.create_all(bind=engine)

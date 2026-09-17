@@ -33,3 +33,17 @@ class SaleQuery(BaseModel):
     promocode: str
     partner_card: bool
     ball: int
+
+class Client(BaseModel):
+    mail: Optional[str] = None
+    login: str
+    password: str
+
+class ClientLogin(BaseModel):
+    login: str
+    password: str
+
+class Store(BaseModel):
+    title: str
+    subtitle: str
+    image: str
