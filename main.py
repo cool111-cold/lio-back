@@ -304,7 +304,7 @@ async def update_link(link_id: int, link: str, label: Optional[str] = None, clie
     base = db.query(BaseLinks).filter(BaseLinks.name == parsed_url.netloc).first()
     local_link.link = link
     if base is not None:
-        local_link.icon = base.icon
+        local_link.icon = base.src
         local_link.label = base.label
     else:
         local_link.icon = None
