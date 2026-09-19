@@ -4,18 +4,19 @@ from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
 from pip._internal.models.link import Link
 
-from database import SessionLocal, SaleDB, UserDB, ProductDB, ClientsDB, LinksDB, StoreDB, BaseLinks
+from database import SessionLocal, SaleDB, UserDB, ProductDB, ClientsDB, LinksDB, StoreDB, BaseLinks, CodesDB
 from sqlalchemy.orm import Session
 from local_types import Sale, SaleQuery, User, Product, Client, ClientLogin, Store
-from auth import hash_password, verify_password, create_access_token, get_current_client_id
+from auth import hash_password, verify_password, create_access_token, get_current_client_id, get_optional_client_id
 from datetime import datetime
 from index import get_user_cards, get_user_product_cards, get_user_products, get_final_price
 from time import perf_counter
 from cache import get_active_cards, refresh_sales_cahce
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
+import secrets
 
-
+#  source .venv/bin/activate
 # uvicorn api:app --no-access-log --loop uvloop --http httptools
 
 @asynccontextmanager
@@ -390,7 +391,7 @@ async def update_store(store_id: int, store: Store, client_id: int = Depends(get
     }
 
 @app.post("/register")
-async def register(client: Client, db: Session = Depends(get_db)):
+async def register(client: Client, card: Optional[str] = None, db: Session = Depends(get_db)):
     existing = db.query(ClientsDB).filter(ClientsDB.login == client.login).first()
     if existing is not None:
         raise HTTPException(status_code=400, detail="Login already taken")
@@ -401,6 +402,22 @@ async def register(client: Client, db: Session = Depends(get_db)):
         password=hash_password(client.password),
     )
     db.add(new_client)
+    db.flush()
+
+    new_store = StoreDB(
+        client_id=new_client.id,
+        title="Название",
+        subtitle="Описание / адрес",
+        image="https://i.pinimg.com/736x/02/62/99/0262999a902deb8fcd8137e005a57551.jpg",
+    )
+    db.add(new_store)
+    db.flush()
+
+    if card is not None:
+        code = db.query(CodesDB).filter(CodesDB.code == card).first()
+        code.store_id = new_store.id
+        db.add(code)
+
     db.commit()
     db.refresh(new_client)
     token = create_access_token(new_client.id)
@@ -411,12 +428,20 @@ async def register(client: Client, db: Session = Depends(get_db)):
     }
 
 @app.post("/login")
-async def login(credentials: ClientLogin, db: Session = Depends(get_db)):
+async def login(credentials: ClientLogin, card: Optional[str] = None, db: Session = Depends(get_db)):
     client = db.query(ClientsDB).filter(ClientsDB.login == credentials.login).first()
     if client is None or not verify_password(credentials.password, client.password):
         raise HTTPException(status_code=401, detail="Invalid login or password")
 
     token = create_access_token(client.id)
+    if card is not None:
+        code = db.query(CodesDB).filter(CodesDB.code == card).first()
+        new_store_id = db.query(StoreDB).filter(StoreDB.client_id == client.id).first()
+        code.store_id = new_store_id.id
+        db.add(code)
+        db.commit()
+        db.refresh(code)
+
     return {
         "message": "Login successful",
         "access_token": token,
@@ -435,7 +460,12 @@ async def delete_client(client_id: int = Depends(get_current_client_id), db: Ses
     client = db.get(ClientsDB, client_id)
     if client is None:
         raise HTTPException(status_code=404, detail="Client not found")
+    store = db.get(StoreDB, client.store_id)
+    code = db.query(CodesDB).filter(ClientsDB.store_id == store.id).first()
+    code.store_id = None
+
     db.delete(client)
+    db.delete(store)
     db.commit()
     return {
         "message": "Client deleted",
@@ -567,7 +597,134 @@ async def start_base_links(db: Session = Depends(get_db)):
         "message": "Base links created",
     }
 
+@app.get("/get-code")
+async def get_code(
+    code_id: str,
+    db: Session = Depends(get_db),
+    client_id: Optional[int] = Depends(get_optional_client_id),
+):
 
+    code = db.query(CodesDB).filter(CodesDB.code == code_id).first()
+    if code is None:
+        raise HTTPException(status_code=404, detail="Code not found")
+
+    if client_id is None:
+        if code.store_id is None:
+            return {
+                "message": "registration",
+                "link": f"/admin/{code_id}"
+            }
+        else:
+            return {
+                "message": 'redirect',
+                "link": f"/{code.store_id}"
+           }
+    else:
+        if code.store_id is None:
+            new_store_id = db.query(StoreDB).filter(StoreDB.client_id == client_id).first()
+            code.store_id = new_store_id.id
+            db.add(code)
+            db.commit()
+            db.refresh(code)
+
+            return {
+                "message": "Code updated",
+                "link": f"/{code.store_id}"
+            }
+        else:
+            return {
+                "message": 'redirect',
+                "link": f"/{code.store_id}"
+           }
+
+
+    # if client_id is not None:
+    #     if code.store_id is None:
+    #         new_store_id = db.query(StoreDB).filter(StoreDB.client_id == client_id).first()
+    #         code.store_id = new_store_id.id
+    #         db.add(code)
+    #         db.commit()
+    #         db.refresh(code)
+    #
+    #         return {
+    #             "message": "Code updated",
+    #             "link": f"/{code.store_id}"
+    #         }
+    #     else:
+    #         return {
+    #             "message": 'redirect',
+    #             "link": f"/{code.store_id}"
+    #         }
+    #
+    # else:
+    #     return {
+    #         "message": 'redirect',
+    #         "link": f"/{code.store_id}"
+    #     }
+
+def generate_unique_code(db: Session, length: int = 16) -> str:
+    while True:
+        code = secrets.token_urlsafe(length)
+        exists = db.query(CodesDB).filter(CodesDB.code == code).first()
+        if exists is None:
+            return code
+
+@app.post("/create-code")
+async def create_code(db: Session = Depends(get_db)):
+    new_code = CodesDB(
+        code=generate_unique_code(db),
+    )
+    db.add(new_code)
+    db.commit()
+    db.refresh(new_code)
+    return {
+        "message": f"Code {new_code.id} created",
+    }
+
+@app.delete("/delete-code")
+async def delete_code(code_id: int, db: Session = Depends(get_db)):
+    code = db.get(CodesDB, code_id)
+    if code is None:
+        raise HTTPException(status_code=404, detail="Code not found")
+    db.delete(code)
+    db.commit()
+    return {
+        "message": f"Code {code_id} deleted",
+    }
+
+@app.get("/get-codes")
+async def get_codes(db: Session = Depends(get_db)):
+    codes = db.query(CodesDB).all()
+    return {
+        "codes": codes,
+    }
+
+@app.post("/reset-store-from-code")
+async def reset_store_from_code(code_id: int, db: Session = Depends(get_db)):
+    code = db.get(CodesDB, code_id)
+    if code is None:
+        raise HTTPException(status_code=404, detail="Code not found")
+    code.store_id = None
+    db.add(code)
+    db.commit()
+    db.refresh(code)
+    return {
+        "message": f"Code {code_id} reset",
+    }
+
+@app.post("/metric")
+async def metric(link_id: int, db: Session = Depends(get_db)):
+    link = db.get(LinksDB, link_id)
+    if link is None:
+        raise HTTPException(status_code=404, detail="Link not found")
+    link.metric = link.metric + 1
+    db.add(link)
+    db.commit()
+    db.refresh(link)
+
+    return {
+        "message": 'success',
+    }
 
 
 

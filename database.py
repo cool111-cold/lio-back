@@ -75,6 +75,7 @@ class LinksDB(Base):
     link = Column(String)
     label = Column(String)
     store_id = Column(Integer)
+    metric = Column(Integer, default=0)
 
 class StoreDB(Base):
     __tablename__ = "stores"
@@ -90,6 +91,13 @@ class ClientsDB(Base):
     mail = Column(String, nullable=True)
     login = Column(String)
     password = Column(String)
+
+
+class CodesDB(Base):
+    __tablename__ = "codes"
+    id = Column(Integer, primary_key=True)
+    code = Column(String)
+    store_id = Column(Integer, nullable=True)
 
 
 
