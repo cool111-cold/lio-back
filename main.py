@@ -29,7 +29,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        "https://helpful-halva-84b879.netlify.app"
+        "https://vapira.ru"
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -613,19 +613,13 @@ async def get_code(
     if code is None:
         raise HTTPException(status_code=404, detail="Code not found")
 
-    if client_id is None:
-        if code.store_id is None:
+    if code.store_id is None:
+        if client_id is None:
             return {
                 "message": "registration",
                 "link": f"/admin/{code_id}"
             }
         else:
-            return {
-                "message": 'redirect',
-                "link": f"/{code.store_id}"
-           }
-    else:
-        if code.store_id is None:
             new_store_id = db.query(StoreDB).filter(StoreDB.client_id == client_id).first()
             code.store_id = new_store_id.id
             db.add(code)
@@ -636,11 +630,40 @@ async def get_code(
                 "message": "Code updated",
                 "link": f"/{code.store_id}"
             }
-        else:
-            return {
-                "message": 'redirect',
-                "link": f"/{code.store_id}"
-           }
+    else:
+        return {
+            "message": 'redirect',
+            "link": f"/{code.store_id}"
+        }
+
+    # if client_id is None:
+    #     if code.store_id is None:
+    #         return {
+    #             "message": "registration",
+    #             "link": f"/admin/{code_id}"
+    #         }
+    #     else:
+    #         return {
+    #             "message": 'redirect',
+    #             "link": f"/{code.store_id}"
+    #        }
+    # else:
+    #     if code.store_id is None:
+    #         new_store_id = db.query(StoreDB).filter(StoreDB.client_id == client_id).first()
+    #         code.store_id = new_store_id.id
+    #         db.add(code)
+    #         db.commit()
+    #         db.refresh(code)
+    #
+    #         return {
+    #             "message": "Code updated",
+    #             "link": f"/{code.store_id}"
+    #         }
+    #     else:
+    #         return {
+    #             "message": 'redirect',
+    #             "link": f"/{code.store_id}"
+    #        }
 
 
     # if client_id is not None:
