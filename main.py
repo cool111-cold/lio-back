@@ -396,6 +396,13 @@ async def register(client: Client, card: Optional[str] = None, db: Session = Dep
     if existing is not None:
         raise HTTPException(status_code=400, detail="Login already taken")
 
+    if card is None:
+        raise HTTPException(status_code=400, detail="Invalid card")
+
+    code = db.query(CodesDB).filter(CodesDB.code == card).first()
+    if code is None:
+        raise HTTPException(status_code=400, detail="Invalid card")
+
     new_client = ClientsDB(
         mail=client.mail,
         login=client.login,
@@ -413,10 +420,8 @@ async def register(client: Client, card: Optional[str] = None, db: Session = Dep
     db.add(new_store)
     db.flush()
 
-    if card is not None:
-        code = db.query(CodesDB).filter(CodesDB.code == card).first()
-        code.store_id = new_store.id
-        db.add(code)
+    code.store_id = new_store.id
+    db.add(code)
 
     db.commit()
     db.refresh(new_client)
