@@ -1,5 +1,6 @@
 from fastapi import HTTPException
-from fastapi import FastAPI, Depends, Form, Request
+from fastapi import FastAPI, Depends, Form, Request, UploadFile, File, Query
+from fastapi.staticfiles import StaticFiles
 from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
 from pip._internal.models.link import Link
@@ -15,6 +16,9 @@ from cache import get_active_cards, refresh_sales_cahce
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 import secrets
+import os
+import uuid
+import mimetypes
 
 #  source .venv/bin/activate
 # uvicorn api:app --no-access-log --loop uvloop --http httptools
@@ -35,6 +39,51 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
+DEFAULT_STORE_IMAGE = "/uploads/def.jpg"
+
+ALLOWED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif", "image/jpg"}
+MAX_IMAGE_SIZE = 10 * 1024 * 1024
+MAX_GIF_SIZE = 20 * 1024 * 1024
+UPLOAD_CHUNK_SIZE = 1024 * 1024
+
+def save_image(image: UploadFile) -> str:
+    if image.content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(status_code=400, detail="Unsupported image type")
+    max_size = MAX_GIF_SIZE if image.content_type == "image/gif" else MAX_IMAGE_SIZE
+    ext = os.path.splitext(image.filename or "")[1] or mimetypes.guess_extension(image.content_type) or ""
+    filename = f"{uuid.uuid4().hex}{ext}"
+    path = os.path.join(UPLOAD_DIR, filename)
+    size = 0
+    try:
+        with open(path, "wb") as f:
+            while chunk := image.file.read(UPLOAD_CHUNK_SIZE):
+                size += len(chunk)
+                if size > max_size:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Image too large (max {max_size // (1024 * 1024)}MB)",
+                    )
+                f.write(chunk)
+    except HTTPException:
+        if os.path.isfile(path):
+            os.remove(path)
+        raise
+    return f"/uploads/{filename}"
+
+def delete_uploaded_file(url: Optional[str]):
+    if not url or not url.startswith("/uploads/") or url == DEFAULT_STORE_IMAGE:
+        return
+    path = os.path.join(UPLOAD_DIR, os.path.basename(url))
+    if os.path.isfile(path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 def get_db():
     db = SessionLocal()
@@ -249,14 +298,29 @@ async def get_links(store_id: int, db: Session = Depends(get_db)):
     }
 
 @app.post("/create-link")
-async def create_link(link: str, label: Optional[str] = None, client_id: int = Depends(get_current_client_id), db: Session = Depends(get_db)):
+async def create_link(
+    link: str = Query(...),
+    label: Optional[str] = Query(None),
+    image: Optional[UploadFile] = File(None),
+    client_id: int = Depends(get_current_client_id),
+    db: Session = Depends(get_db),
+):
     store = db.query(StoreDB).filter(StoreDB.client_id == client_id).first()
     if store is None:
         raise HTTPException(status_code=404, detail="Store not found")
 
+    icon_url = save_image(image) if image is not None and image.filename else None
+
     parsed_url = urlparse(link)
     base = db.query(BaseLinks).filter(BaseLinks.name == parsed_url.netloc).first()
-    if base is not None:
+    if icon_url is not None:
+        new_link = LinksDB(
+            icon=icon_url,
+            link=link,
+            label=label if label is not None else (base.label if base is not None else parsed_url.netloc),
+            store_id=store.id,
+        )
+    elif base is not None:
         new_link = LinksDB(
             icon=base.src,
             link=link,
@@ -276,6 +340,7 @@ async def create_link(link: str, label: Optional[str] = None, client_id: int = D
     db.refresh(new_link)
     return {
         "message": "Link created",
+        "link": new_link,
     }
 
 @app.post("/delete-link")
@@ -286,14 +351,23 @@ async def delete_link(link_id: int, client_id: int = Depends(get_current_client_
     store = db.get(StoreDB, link.store_id)
     if store is None or store.client_id != client_id:
         raise HTTPException(status_code=403, detail="Not authorized to delete this link")
+    old_icon = link.icon
     db.delete(link)
     db.commit()
+    delete_uploaded_file(old_icon)
     return {
         "message": "Link deleted",
     }
 
 @app.post("/update-link")
-async def update_link(link_id: int, link: str, label: Optional[str] = None, client_id: int = Depends(get_current_client_id), db: Session = Depends(get_db)):
+async def update_link(
+    link_id: int,
+    link: str = Query(...),
+    label: Optional[str] = Query(None),
+    image: Optional[UploadFile] = File(None),
+    client_id: int = Depends(get_current_client_id),
+    db: Session = Depends(get_db),
+):
     local_link = db.get(LinksDB, link_id)
     if local_link is None:
         raise HTTPException(status_code=404, detail="Link not found")
@@ -301,21 +375,34 @@ async def update_link(link_id: int, link: str, label: Optional[str] = None, clie
     if store is None or store.client_id != client_id:
         raise HTTPException(status_code=403, detail="Not authorized to update this link")
 
+    icon_url = save_image(image) if image is not None and image.filename else None
+
     parsed_url = urlparse(link)
     base = db.query(BaseLinks).filter(BaseLinks.name == parsed_url.netloc).first()
+    old_icon = local_link.icon
     local_link.link = link
-    if base is not None:
+    if icon_url is not None:
+        local_link.icon = icon_url
+    elif base is not None:
         local_link.icon = base.src
-        local_link.label = base.label
     else:
         local_link.icon = None
-        local_link.label = label if label is not None else parsed_url.netloc
+
+    if label is not None:
+        local_link.label = label
+    elif base is not None:
+        local_link.label = base.label
+    else:
+        local_link.label = parsed_url.netloc
 
     db.add(local_link)
     db.commit()
     db.refresh(local_link)
+    if local_link.icon != old_icon:
+        delete_uploaded_file(old_icon)
     return {
         "message": "Link updated",
+        "link": local_link,
     }
 
 @app.post("/create-store")
@@ -349,7 +436,7 @@ async def get_stor_by_id(client_id: int = Depends(get_current_client_id), db: Se
             client_id=client_id,
             title="Название",
             subtitle="Описание / адрес",
-            image="https://i.pinimg.com/736x/02/62/99/0262999a902deb8fcd8137e005a57551.jpg",
+            image=DEFAULT_STORE_IMAGE,
         )
         db.add(store)
         db.commit()
@@ -367,27 +454,40 @@ async def delete_store(store_id: int, client_id: int = Depends(get_current_clien
         raise HTTPException(status_code=404, detail="Store not found")
     if store.client_id != client_id:
         raise HTTPException(status_code=403, detail="Not authorized to delete this store")
+    old_image = store.image
     db.delete(store)
     db.commit()
+    delete_uploaded_file(old_image)
     return {
         "message": "Store deleted",
     }
 
 @app.post("/update-store")
-async def update_store(store_id: int, store: Store, client_id: int = Depends(get_current_client_id), db: Session = Depends(get_db)):
+async def update_store(
+    store_id: int,
+    title: str = Form(...),
+    subtitle: str = Form(...),
+    image: Optional[UploadFile] = File(None),
+    client_id: int = Depends(get_current_client_id),
+    db: Session = Depends(get_db),
+):
     local_store = db.get(StoreDB, store_id)
     if local_store is None:
         raise HTTPException(status_code=404, detail="Store not found")
     if local_store.client_id != client_id:
         raise HTTPException(status_code=403, detail="Not authorized to update this store")
-    local_store.title = store.title
-    local_store.subtitle = store.subtitle
-    local_store.image = store.image
+    local_store.title = title
+    local_store.subtitle = subtitle
+    if image is not None and image.filename:
+        old_image = local_store.image
+        local_store.image = save_image(image)
+        delete_uploaded_file(old_image)
     db.add(local_store)
     db.commit()
     db.refresh(local_store)
     return {
         "message": "Store updated",
+        "store": local_store,
     }
 
 @app.post("/register")
@@ -415,7 +515,7 @@ async def register(client: Client, card: Optional[str] = None, db: Session = Dep
         client_id=new_client.id,
         title="Название",
         subtitle="Описание / адрес",
-        image="https://i.pinimg.com/736x/02/62/99/0262999a902deb8fcd8137e005a57551.jpg",
+        image=DEFAULT_STORE_IMAGE,
     )
     db.add(new_store)
     db.flush()
@@ -465,13 +565,24 @@ async def delete_client(client_id: int = Depends(get_current_client_id), db: Ses
     client = db.get(ClientsDB, client_id)
     if client is None:
         raise HTTPException(status_code=404, detail="Client not found")
-    store = db.get(StoreDB, client.store_id)
-    code = db.query(CodesDB).filter(ClientsDB.store_id == store.id).first()
+    store = db.query(StoreDB).filter(StoreDB.client_id == client.id).first()
+    code = db.query(CodesDB).filter(CodesDB.store_id == store.id).first()
     code.store_id = None
 
+    links = db.query(LinksDB).filter(LinksDB.store_id == store.id).all()
+    icon_files = [link.icon for link in links]
+    for link in links:
+        db.delete(link)
+
+    store_image = store.image
     db.delete(client)
     db.delete(store)
     db.commit()
+
+    for icon in icon_files:
+        delete_uploaded_file(icon)
+    delete_uploaded_file(store_image)
+
     return {
         "message": "Client deleted",
     }
