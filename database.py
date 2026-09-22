@@ -84,6 +84,7 @@ class StoreDB(Base):
     subtitle = Column(String)
     image = Column(String)
     client_id = Column(Integer)
+    isMain = Column(Boolean, default=False)
 
 class ClientsDB(Base):
     __tablename__ = "clients"

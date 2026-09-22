@@ -305,7 +305,7 @@ async def create_link(
     client_id: int = Depends(get_current_client_id),
     db: Session = Depends(get_db),
 ):
-    store = db.query(StoreDB).filter(StoreDB.client_id == client_id).first()
+    store = db.query(StoreDB).filter(StoreDB.client_id == client_id, StoreDB.isMain == True).first()
     if store is None:
         raise HTTPException(status_code=404, detail="Store not found")
 
@@ -406,13 +406,26 @@ async def update_link(
     }
 
 @app.post("/create-store")
-async def create_store(store: Store, client_id: int = Depends(get_current_client_id), db: Session = Depends(get_db)):
-    new_store = StoreDB(
-        title=store.title,
-        subtitle=store.subtitle,
-        image=store.image,
-        client_id=client_id,
-    )
+async def create_store(store: Optional[Store] = None, reference_id: Optional[int] = None, client_id: int = Depends(get_current_client_id), db: Session = Depends(get_db)):
+    if reference_id is None:
+        new_store = StoreDB(
+            title=store.title,
+            subtitle=store.subtitle,
+            image=store.image,
+            client_id=client_id,
+            isMain=False,
+        )
+    else:
+        old_store = db.get(StoreDB, reference_id)
+        if old_store is None:
+            raise HTTPException(status_code=404, detail="Store not found")
+        new_store = StoreDB(
+            title=old_store.title,
+            subtitle=old_store.subtitle,
+            image=old_store.image,
+            client_id=client_id,
+            isMain=False,
+        )
     db.add(new_store)
     db.commit()
     db.refresh(new_store)
@@ -428,15 +441,35 @@ async def get_stores(db: Session = Depends(get_db)):
         "stores": stores,
     }
 
+@app.post("/change-main-store")
+async def change_main_store(store_id: int, client_id: int = Depends(get_current_client_id), db: Session = Depends(get_db)):
+    store = db.query(StoreDB).filter(StoreDB.id == store_id, StoreDB.client_id == client_id).first()
+    old_main_store = db.query(StoreDB).filter(StoreDB.client_id == client_id, StoreDB.isMain == True).first()
+    if store is None:
+        raise HTTPException(status_code=404, detail="Store not found")
+    if old_main_store is None:
+        raise HTTPException(status_code=404, detail="Store not found")
+    store.isMain = True
+    old_main_store.isMain = False
+    db.commit()
+    db.refresh(old_main_store)
+    return {
+        "message": "Main store changed",
+        "store": store.id,
+
+    }
+
+
 @app.get("/get-my-store")
 async def get_stor_by_id(client_id: int = Depends(get_current_client_id), db: Session = Depends(get_db)):
-    store = db.query(StoreDB).filter(StoreDB.client_id == client_id).first()
+    store = db.query(StoreDB).filter(StoreDB.client_id == client_id, StoreDB.isMain == True).first()
     if store is None:
         store = StoreDB(
             client_id=client_id,
             title="Название",
             subtitle="Описание / адрес",
             image=DEFAULT_STORE_IMAGE,
+            isMain=True,
         )
         db.add(store)
         db.commit()
@@ -445,6 +478,17 @@ async def get_stor_by_id(client_id: int = Depends(get_current_client_id), db: Se
     return {
         "store_id": store.id,
         "mail": client.mail,
+    }
+
+@app.get("/get-my-stories")
+def get_my_stories(offset: int = 0, limit: int = 0, client_id: int = Depends(get_current_client_id), db: Session = Depends(get_db)):
+    stores = db.query(StoreDB).filter(StoreDB.client_id == client_id).offset(offset).limit(limit).all()
+    if stores is None:
+        raise HTTPException(status_code=404, detail="Store not found")
+    return {
+        "stores": stores,
+        "offset": offset,
+        "limit": limit,
     }
 
 @app.post("/delete-store")
@@ -516,6 +560,7 @@ async def register(client: Client, card: Optional[str] = None, db: Session = Dep
         title="Название",
         subtitle="Описание / адрес",
         image=DEFAULT_STORE_IMAGE,
+        isMain=True,
     )
     db.add(new_store)
     db.flush()
@@ -541,7 +586,7 @@ async def login(credentials: ClientLogin, card: Optional[str] = None, db: Sessio
     token = create_access_token(client.id)
     if card is not None:
         code = db.query(CodesDB).filter(CodesDB.code == card).first()
-        new_store_id = db.query(StoreDB).filter(StoreDB.client_id == client.id).first()
+        new_store_id = db.query(StoreDB).filter(StoreDB.client_id == client.id, StoreDB.isMain == True).first()
         code.store_id = new_store_id.id
         db.add(code)
         db.commit()
@@ -565,23 +610,30 @@ async def delete_client(client_id: int = Depends(get_current_client_id), db: Ses
     client = db.get(ClientsDB, client_id)
     if client is None:
         raise HTTPException(status_code=404, detail="Client not found")
-    store = db.query(StoreDB).filter(StoreDB.client_id == client.id).first()
-    code = db.query(CodesDB).filter(CodesDB.store_id == store.id).first()
-    code.store_id = None
+    stores = db.query(StoreDB).filter(StoreDB.client_id == client.id).all()
 
-    links = db.query(LinksDB).filter(LinksDB.store_id == store.id).all()
-    icon_files = [link.icon for link in links]
-    for link in links:
-        db.delete(link)
+    icon_files = []
+    store_images = []
+    for store in stores:
+        codes = db.query(CodesDB).filter(CodesDB.store_id == store.id).all()
+        for code in codes:
+            code.store_id = None
 
-    store_image = store.image
+        links = db.query(LinksDB).filter(LinksDB.store_id == store.id).all()
+        icon_files.extend(link.icon for link in links)
+        for link in links:
+            db.delete(link)
+
+        store_images.append(store.image)
+        db.delete(store)
+
     db.delete(client)
-    db.delete(store)
     db.commit()
 
     for icon in icon_files:
         delete_uploaded_file(icon)
-    delete_uploaded_file(store_image)
+    for store_image in store_images:
+        delete_uploaded_file(store_image)
 
     return {
         "message": "Client deleted",
@@ -731,7 +783,7 @@ async def get_code(
                 "link": f"/admin/{code_id}"
             }
         else:
-            new_store_id = db.query(StoreDB).filter(StoreDB.client_id == client_id).first()
+            new_store_id = db.query(StoreDB).filter(StoreDB.client_id == client_id, StoreDB.isMain == True).first()
             code.store_id = new_store_id.id
             db.add(code)
             db.commit()
@@ -747,59 +799,17 @@ async def get_code(
             "link": f"/{code.store_id}"
         }
 
-    # if client_id is None:
-    #     if code.store_id is None:
-    #         return {
-    #             "message": "registration",
-    #             "link": f"/admin/{code_id}"
-    #         }
-    #     else:
-    #         return {
-    #             "message": 'redirect',
-    #             "link": f"/{code.store_id}"
-    #        }
-    # else:
-    #     if code.store_id is None:
-    #         new_store_id = db.query(StoreDB).filter(StoreDB.client_id == client_id).first()
-    #         code.store_id = new_store_id.id
-    #         db.add(code)
-    #         db.commit()
-    #         db.refresh(code)
-    #
-    #         return {
-    #             "message": "Code updated",
-    #             "link": f"/{code.store_id}"
-    #         }
-    #     else:
-    #         return {
-    #             "message": 'redirect',
-    #             "link": f"/{code.store_id}"
-    #        }
-
-
-    # if client_id is not None:
-    #     if code.store_id is None:
-    #         new_store_id = db.query(StoreDB).filter(StoreDB.client_id == client_id).first()
-    #         code.store_id = new_store_id.id
-    #         db.add(code)
-    #         db.commit()
-    #         db.refresh(code)
-    #
-    #         return {
-    #             "message": "Code updated",
-    #             "link": f"/{code.store_id}"
-    #         }
-    #     else:
-    #         return {
-    #             "message": 'redirect',
-    #             "link": f"/{code.store_id}"
-    #         }
-    #
-    # else:
-    #     return {
-    #         "message": 'redirect',
-    #         "link": f"/{code.store_id}"
-    #     }
+@app.get("/get-my-codes")
+async def get_my_codes(offset: int = 0, limit: int = 10, client_id: int = Depends(get_current_client_id), db: Session = Depends(get_db)):
+    store = db.query(StoreDB).filter(StoreDB.client_id == client_id, StoreDB.isMain == True).first()
+    if store is None:
+        raise HTTPException(status_code=404, detail="Store not found")
+    codes = db.query(CodesDB).filter(CodesDB.store_id == store.id).offset(offset).limit(limit).all()
+    return {
+        "codes": codes,
+        "offset": offset,
+        "limit": limit,
+    }
 
 def generate_unique_code(db: Session, length: int = 16) -> str:
     while True:
@@ -839,10 +849,15 @@ async def get_codes(db: Session = Depends(get_db)):
     }
 
 @app.post("/reset-store-from-code")
-async def reset_store_from_code(code_id: int, db: Session = Depends(get_db)):
+async def reset_store_from_code(code_id: int, client_id: int = Depends(get_current_client_id), db: Session = Depends(get_db)):
     code = db.get(CodesDB, code_id)
     if code is None:
         raise HTTPException(status_code=404, detail="Code not found")
+    if code.store_id is None:
+        raise HTTPException(status_code=404, detail="Code not found")
+    store = db.get(StoreDB, code.store_id)
+    if store is None or store.client_id != client_id:
+        raise HTTPException(status_code=403, detail="Not authorized to reset this code")
     code.store_id = None
     db.add(code)
     db.commit()
@@ -864,43 +879,3 @@ async def metric(link_id: int, db: Session = Depends(get_db)):
     return {
         "message": 'success',
     }
-
-
-
-    # actual_cards = get_discount(user, products, cards)
-    # orig_price = sum(product["quantity"] * product["product"].price for product in products)
-    # price = get_price(orig_price, actual_cards)
-
-    # return {
-    #     "price": orig_price,
-    #     "price-after-sale": price,
-    #     "products": products,
-    # }
-
-
-
-# {
-#   "name": "VIP клиенту",
-#   "active": true,
-#   "started_at": "2026-08-28T09:08:10.132Z",
-#   "ended_at": "2026-09-06T09:08:10.132Z",
-#   "summary": true,
-#   "priority": 1,
-#   "isProduct": false,
-#   "discount": 10,
-#   "condition": [{
-#     "field": "user.status", "operator": "==", "value": "vip"
-#   }]
-# }
-
-# {
-#   "user_id": 1,
-#   "product_id": [
-#     {
-#       "product": 1,
-#       "quantity": 1
-#     }
-#   ],
-#   "promocode": "",
-#   "partner_card": false
-# }
