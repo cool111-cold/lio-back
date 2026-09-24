@@ -5,14 +5,15 @@ from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
 from pip._internal.models.link import Link
 
-from database import SessionLocal, SaleDB, UserDB, ProductDB, ClientsDB, LinksDB, StoreDB, BaseLinks, CodesDB
+from database import SessionLocal, ClientsDB, LinksDB, StoreDB, BaseLinks, CodesDB, CrmUsersDB
 from sqlalchemy.orm import Session
-from local_types import Sale, SaleQuery, User, Product, Client, ClientLogin, Store
-from auth import hash_password, verify_password, create_access_token, get_current_client_id, get_optional_client_id
+from local_types import Client, ClientLogin, Store, CrmUser, CrmUserUpdate
+from auth import (
+    hash_password, verify_password, create_access_token, get_current_client_id, get_optional_client_id,
+    create_crm_access_token, get_current_crm_user, get_current_crm_admin,
+)
 from datetime import datetime
-from index import get_user_cards, get_user_product_cards, get_user_products, get_final_price
 from time import perf_counter
-from cache import get_active_cards, refresh_sales_cahce
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 import secrets
@@ -23,12 +24,7 @@ import mimetypes
 #  source .venv/bin/activate
 # uvicorn api:app --no-access-log --loop uvloop --http httptools
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    refresh_sales_cahce()
-    yield
-
-app = FastAPI(lifespan=lifespan)
+app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -110,177 +106,6 @@ async def timing_middleware(request: Request, call_next):
     )
 
     return response
-#
-# @app.post("/create-sale")
-# async def create_sale(sale: Sale, db: Session = Depends(get_db)):
-#     new_sale = SaleDB(
-#         name = sale.name,
-#         active = sale.active,
-#         started_at = sale.started_at,
-#         ended_at = sale.ended_at,
-#         summary = sale.summary,
-#         isProduct = sale.isProduct,
-#         priority = sale.priority,
-#         discount = sale.discount / 100,
-#         condition = sale.condition,
-#     )
-#     db.add(new_sale)
-#     db.commit()
-#     refresh_sales_cahce()
-#     db.refresh(new_sale)
-#
-#     return {
-#         "message": "Sale created",
-#         "sale": new_sale.id,
-#     }
-#
-# @app.get("/get-sales")
-# async def get_sales(db: Session = Depends(get_db)):
-#     sales = db.query(SaleDB).all()
-#     return {
-#         "message": "Sales found",
-#         "sale": sales,
-#     }
-#
-# @app.post("/deleted-sale")
-# async def deleted_sale(db: Session = Depends(get_db), sale_id: int = Form(...)):
-#     sale = db.query(SaleDB).get(sale_id)
-#     if sale is None:
-#         raise HTTPException(status_code=404, detail="Sale not found")
-#     db.delete(sale)
-#     db.commit()
-#     refresh_sales_cahce()
-#     return {
-#         "message": "Sale deleted",
-#     }
-#
-# @app.post("/update-sale")
-# async def update_sale(sale: Sale, sale_id: int, db: Session = Depends(get_db)):
-#     local_sale = db.query(SaleDB).get(sale_id)
-#     if local_sale is None:
-#         raise HTTPException(status_code=404, detail="Sale not found")
-#     local_sale.name = sale.name
-#     local_sale.active = sale.active
-#     local_sale.started_at = sale.started_at
-#     local_sale.ended_at = sale.ended_at
-#     local_sale.summary = sale.summary
-#     local_sale.condition = sale.condition
-#     local_sale.discount = sale.discount / 100
-#     local_sale.priority = sale.priority
-#     local_sale.isProduct = sale.isProduct
-#     local_sale.code = sale.code
-#     db.add(local_sale)
-#     db.commit()
-#     refresh_sales_cahce()
-#     db.refresh(local_sale)
-#     return {
-#         "message": "Sale updated",
-#     }
-#
-# @app.post("/create-user")
-# async def create_user(user: User, db: Session = Depends(get_db)):
-#     new_user = UserDB(
-#         name = user.name,
-#         region = user.region,
-#         status = user.status,
-#     )
-#     db.add(new_user)
-#     db.commit()
-#     db.refresh(new_user)
-#     return {
-#         "message": "User created",
-#     }
-#
-# @app.get("/get-users")
-# async def get_users(db: Session = Depends(get_db)):
-#     users = db.query(UserDB).all()
-#     return {
-#         "users": users,
-#     }
-#
-# @app.get("/get-products")
-# async def get_products(db: Session = Depends(get_db)):
-#     products = db.query(ProductDB).all()
-#     return {
-#         "products": products,
-#     }
-#
-# @app.post("/delete-user")
-# async def delete_user(user_id: int, db: Session = Depends(get_db)):
-#     user = db.query(UserDB).get(user_id)
-#     if user is None:
-#         raise HTTPException(status_code=404, detail="User not found")
-#     db.delete(user)
-#     db.commit()
-#     return {
-#         "message": "User deleted",
-#     }
-#
-# @app.post("/delete-product")
-# async def delete_product(product_id: int, db: Session = Depends(get_db)):
-#     product = db.query(ProductDB).get(product_id)
-#     if product is None:
-#         raise HTTPException(status_code=404, detail="Product not found")
-#     db.delete(product)
-#     db.commit()
-#     return {
-#         "message": "Product deleted",
-#     }
-#
-# @app.post("/create-product")
-# async def create_product(product: Product, db: Session = Depends(get_db)):
-#     new_product = ProductDB(
-#         name = product.name,
-#         price = product.price,
-#         card_price = product.card_price,
-#         category = product.category,
-#     )
-#     db.add(new_product)
-#     db.commit()
-#     db.refresh(new_product)
-#     return {
-#         "message": "Product created",
-#     }
-#
-# @app.post("/get-price")
-# async def get_price(data: SaleQuery, db: Session = Depends(get_db), param_datetime: Optional[datetime] = None):
-#
-#     start = perf_counter()
-#
-#     user = db.query(UserDB).filter(UserDB.id == data.user_id).first()
-#
-#     t1 = perf_counter()
-#
-#     # product_cards = get_user_product_cards(db, param_datetime)
-#     product_cards, user_cards = get_active_cards(param_datetime)
-#
-#     t2 = perf_counter()
-#
-#     products = get_user_products(db, data.product_id, product_cards, user, data.partner_card)
-#
-#     t3 = perf_counter()
-#
-#     # user_cards = get_user_cards(db, param_datetime)
-#
-#     t4 = perf_counter()
-#
-#     user_sales, final_price = get_final_price(user_cards, user, data.promocode, data.ball, sum([product["summ_price"] for product in products]))
-#
-#     t5 = perf_counter()
-#     print("\n=== /get-price breakdown ===")
-#     print(f"  [1] get user (SQL):             {(t1 - start) * 1000:.3f} ms")
-#     print(f"  [2] get_user_product_cards:     {(t2 - t1) * 1000:.3f} ms")
-#     print(f"  [3] get_user_products:          {(t3 - t2) * 1000:.3f} ms")
-#     print(f"  [4] get_user_cards:             {(t4 - t3) * 1000:.3f} ms")
-#     print(f"  [5] get_final_price:            {(t5 - t4) * 1000:.3f} ms")
-#     print(f"  --- TOTAL:                      {(t5 - start) * 1000:.3f} ms")
-#     print("===========================\n")
-#
-#     return {
-#         "products": products,
-#         "user_sales": user_sales,
-#         "price": final_price,
-#     }
 
 
 @app.get("/get-links")
@@ -434,12 +259,6 @@ async def create_store(store: Optional[Store] = None, reference_id: Optional[int
         "store": new_store.id,
     }
 
-@app.get("/get-stores")
-async def get_stores(db: Session = Depends(get_db)):
-    stores = db.query(StoreDB).all()
-    return {
-        "stores": stores,
-    }
 
 @app.post("/change-main-store")
 async def change_main_store(store_id: int, client_id: int = Depends(get_current_client_id), db: Session = Depends(get_db)):
@@ -598,13 +417,6 @@ async def login(credentials: ClientLogin, card: Optional[str] = None, db: Sessio
         "token_type": "bearer",
     }
 
-@app.get("/get-clients")
-async def get_clients(db: Session = Depends(get_db)):
-    clients = db.query(ClientsDB).all()
-    return {
-        "clients": [{"id": c.id, "mail": c.mail, "login": c.login} for c in clients],
-    }
-
 @app.post("/delete-client")
 async def delete_client(client_id: int = Depends(get_current_client_id), db: Session = Depends(get_db)):
     client = db.get(ClientsDB, client_id)
@@ -702,69 +514,6 @@ LINKS = {
     }
 }
 
-@app.get("/get-base-links")
-async def get_base_links(db: Session = Depends(get_db)):
-    base = db.query(BaseLinks).all()
-    return {
-        "base": base,
-    }
-
-
-@app.get("/create-base-links")
-async def create_base_links(name: str, src: str, label: str, db: Session = Depends(get_db)):
-    new_base = BaseLinks(
-        name=name,
-        src=src,
-        label=label,
-    )
-    db.add(new_base)
-    db.commit()
-    db.refresh(new_base)
-    return {
-        "message": "Base link created",
-    }
-
-@app.delete("/delete-base-links")
-async def delete_base_links(link_id: int, db: Session = Depends(get_db)):
-    base = db.get(BaseLinks, link_id)
-    if base is None:
-        raise HTTPException(status_code=404, detail="Base link not found")
-    db.delete(base)
-    db.commit()
-
-    return {
-        "message": "Base link deleted",
-    }
-
-@app.post("/update-base-links")
-async def update_base_link(baselink_id: int, name: str, src: str, label: str, db: Session = Depends(get_db)):
-    base = db.get(BaseLinks, baselink_id)
-    if base is None:
-        raise HTTPException(status_code=404, detail="Base link not found")
-    base.name = name
-    base.src = src
-    base.label = label
-    db.add(base)
-    db.commit()
-    db.refresh(base)
-    return {
-        "message": "Base link updated",
-    }
-
-@app.get("/start-base-links")
-async def start_base_links(db: Session = Depends(get_db)):
-    for name, data in LINKS.items():
-        await create_base_links(
-            name=name,
-            src=data["src"],
-            label=data["label"],
-            db=db
-        )
-
-    return {
-        "message": "Base links created",
-    }
-
 @app.get("/get-code")
 async def get_code(
     code_id: str,
@@ -818,36 +567,6 @@ def generate_unique_code(db: Session, length: int = 16) -> str:
         if exists is None:
             return code
 
-@app.post("/create-code")
-async def create_code(db: Session = Depends(get_db)):
-    new_code = CodesDB(
-        code=generate_unique_code(db),
-    )
-    db.add(new_code)
-    db.commit()
-    db.refresh(new_code)
-    return {
-        "message": f"Code {new_code.id} created",
-    }
-
-@app.delete("/delete-code")
-async def delete_code(code_id: int, db: Session = Depends(get_db)):
-    code = db.get(CodesDB, code_id)
-    if code is None:
-        raise HTTPException(status_code=404, detail="Code not found")
-    db.delete(code)
-    db.commit()
-    return {
-        "message": f"Code {code_id} deleted",
-    }
-
-@app.get("/get-codes")
-async def get_codes(db: Session = Depends(get_db)):
-    codes = db.query(CodesDB).all()
-    return {
-        "codes": codes,
-    }
-
 @app.post("/reset-store-from-code")
 async def reset_store_from_code(code_id: int, client_id: int = Depends(get_current_client_id), db: Session = Depends(get_db)):
     code = db.get(CodesDB, code_id)
@@ -878,4 +597,243 @@ async def metric(link_id: int, db: Session = Depends(get_db)):
 
     return {
         "message": 'success',
+    }
+
+
+def crm_user_to_dict(user: CrmUsersDB) -> dict:
+    return {"id": user.id, "login": user.login, "status": user.status}
+
+@app.post("/crm/init-admin")
+async def crm_init_admin(credentials: ClientLogin, db: Session = Depends(get_db)):
+    # Первый админ создаётся без авторизации, но только пока в базе нет ни одного админа
+    if db.query(CrmUsersDB).filter(CrmUsersDB.status == "admin").first() is not None:
+        raise HTTPException(status_code=403, detail="Admin already exists")
+    if db.query(CrmUsersDB).filter(CrmUsersDB.login == credentials.login).first() is not None:
+        raise HTTPException(status_code=400, detail="Login already taken")
+    admin = CrmUsersDB(
+        login=credentials.login,
+        password=hash_password(credentials.password),
+        status="admin",
+    )
+    db.add(admin)
+    db.commit()
+    db.refresh(admin)
+    return {
+        "message": "Admin created",
+        "access_token": create_crm_access_token(admin.id),
+        "token_type": "bearer",
+    }
+
+@app.post("/crm/login")
+async def crm_login(credentials: ClientLogin, db: Session = Depends(get_db)):
+    user = db.query(CrmUsersDB).filter(CrmUsersDB.login == credentials.login).first()
+    if user is None or not verify_password(credentials.password, user.password):
+        raise HTTPException(status_code=401, detail="Invalid login or password")
+    return {
+        "message": "Login successful",
+        "access_token": create_crm_access_token(user.id),
+        "token_type": "bearer",
+        "user": crm_user_to_dict(user),
+    }
+
+@app.get("/crm/me")
+async def crm_me(user: CrmUsersDB = Depends(get_current_crm_user)):
+    return {
+        "user": crm_user_to_dict(user),
+    }
+
+@app.get("/crm/get-users")
+async def crm_get_users(db: Session = Depends(get_db)):
+    users = db.query(CrmUsersDB).all()
+    return {
+        "users": [crm_user_to_dict(u) for u in users],
+    }
+
+@app.post("/crm/create-user")
+async def crm_create_user(user: CrmUser, admin: CrmUsersDB = Depends(get_current_crm_admin), db: Session = Depends(get_db)):
+    if db.query(CrmUsersDB).filter(CrmUsersDB.login == user.login).first() is not None:
+        raise HTTPException(status_code=400, detail="Login already taken")
+    new_user = CrmUsersDB(
+        login=user.login,
+        password=hash_password(user.password),
+        status=user.status,
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return {
+        "message": "CRM user created",
+        "user": crm_user_to_dict(new_user),
+    }
+
+@app.post("/crm/update-user")
+async def crm_update_user(user_id: int, user: CrmUserUpdate, admin: CrmUsersDB = Depends(get_current_crm_admin), db: Session = Depends(get_db)):
+    local_user = db.get(CrmUsersDB, user_id)
+    if local_user is None:
+        raise HTTPException(status_code=404, detail="CRM user not found")
+    if user.login is not None and user.login != local_user.login:
+        if db.query(CrmUsersDB).filter(CrmUsersDB.login == user.login).first() is not None:
+            raise HTTPException(status_code=400, detail="Login already taken")
+        local_user.login = user.login
+    if user.password is not None:
+        local_user.password = hash_password(user.password)
+    if user.status is not None:
+        if local_user.id == admin.id and user.status != "admin":
+            raise HTTPException(status_code=400, detail="Cannot remove admin rights from yourself")
+        local_user.status = user.status
+    db.add(local_user)
+    db.commit()
+    db.refresh(local_user)
+    return {
+        "message": "CRM user updated",
+        "user": crm_user_to_dict(local_user),
+    }
+
+@app.delete("/crm/delete-user")
+async def crm_delete_user(user_id: int, admin: CrmUsersDB = Depends(get_current_crm_admin), db: Session = Depends(get_db)):
+    user = db.get(CrmUsersDB, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="CRM user not found")
+    if user.id == admin.id:
+        raise HTTPException(status_code=400, detail="Cannot delete yourself")
+    db.delete(user)
+    db.commit()
+    return {
+        "message": "CRM user deleted",
+    }
+@app.get("/crm/get-clients")
+async def get_clients(offset: int = 0, limit: int = 10, admin: CrmUsersDB = Depends(get_current_crm_admin), db: Session = Depends(get_db)):
+    if admin.status != "admin":
+        raise HTTPException(status_code=401, detail="Invalid rules")
+
+    clients = db.query(ClientsDB).offset(offset).limit(limit).all()
+    return {
+        "clients": [{"id": c.id, "mail": c.mail, "login": c.login} for c in clients],
+        "offset": offset,
+        "limit": limit,
+    }
+
+@app.get("/crm/get-base-links")
+async def get_base_links(admin: CrmUsersDB = Depends(get_current_crm_admin), db: Session = Depends(get_db)):
+    if admin.status != "admin":
+        raise HTTPException(status_code=401, detail="Invalid rules")
+    base = db.query(BaseLinks).all()
+    return {
+        "base": base,
+    }
+
+
+@app.get("/crm/create-base-links")
+async def create_base_links(name: str, src: str, label: str, admin: CrmUsersDB = Depends(get_current_crm_admin), db: Session = Depends(get_db)):
+    if admin.status != "admin":
+        raise HTTPException(status_code=401, detail="Invalid rules")
+    new_base = BaseLinks(
+        name=name,
+        src=src,
+        label=label,
+    )
+    db.add(new_base)
+    db.commit()
+    db.refresh(new_base)
+    return {
+        "message": "Base link created",
+    }
+
+@app.delete("/crm/delete-base-links")
+async def delete_base_links(link_id: int, admin: CrmUsersDB = Depends(get_current_crm_admin), db: Session = Depends(get_db)):
+    if admin.status != "admin":
+        raise HTTPException(status_code=401, detail="Invalid rules")
+    base = db.get(BaseLinks, link_id)
+    if base is None:
+        raise HTTPException(status_code=404, detail="Base link not found")
+    db.delete(base)
+    db.commit()
+
+    return {
+        "message": "Base link deleted",
+    }
+
+@app.post("/crm/update-base-links")
+async def update_base_link(baselink_id: int, name: str, src: str, label: str, admin: CrmUsersDB = Depends(get_current_crm_admin), db: Session = Depends(get_db)):
+    if admin.status != "admin":
+        raise HTTPException(status_code=401, detail="Invalid rules")
+    base = db.get(BaseLinks, baselink_id)
+    if base is None:
+        raise HTTPException(status_code=404, detail="Base link not found")
+    base.name = name
+    base.src = src
+    base.label = label
+    db.add(base)
+    db.commit()
+    db.refresh(base)
+    return {
+        "message": "Base link updated",
+    }
+
+@app.get("/crm/start-base-links")
+async def start_base_links(admin: CrmUsersDB = Depends(get_current_crm_admin), db: Session = Depends(get_db)):
+    if admin.status != "admin":
+        raise HTTPException(status_code=401, detail="Invalid rules")
+    for name, data in LINKS.items():
+        await create_base_links(
+            name=name,
+            src=data["src"],
+            label=data["label"],
+            db=db
+        )
+
+    return {
+        "message": "Base links created",
+    }
+
+@app.post("/crm/create-code")
+async def create_code(admin: CrmUsersDB = Depends(get_current_crm_admin), db: Session = Depends(get_db)):
+    if admin.status != "admin":
+        raise HTTPException(status_code=401, detail="Invalid rules")
+    new_code = CodesDB(
+        code=generate_unique_code(db),
+    )
+    db.add(new_code)
+    db.commit()
+    db.refresh(new_code)
+    return {
+        "message": f"Code {new_code.id} created",
+    }
+
+@app.delete("/crm/delete-code")
+async def delete_code(code_id: int, admin: CrmUsersDB = Depends(get_current_crm_admin), db: Session = Depends(get_db)):
+    if admin.status != "admin":
+        raise HTTPException(status_code=401, detail="Invalid rules")
+    code = db.get(CodesDB, code_id)
+    if code is None:
+        raise HTTPException(status_code=404, detail="Code not found")
+    db.delete(code)
+    db.commit()
+    return {
+        "message": f"Code {code_id} deleted",
+    }
+
+@app.get("/crm/get-codes")
+async def get_codes(offset: int = 0, limit: int = 10, onlyFree: Optional[bool] = None, onlyBusy: Optional[bool] = False,  admin: CrmUsersDB = Depends(get_current_crm_admin), db: Session = Depends(get_db)):
+    if admin.status != "admin":
+        raise HTTPException(status_code=401, detail="Invalid rules")
+    if onlyFree:
+        codes = db.query(CodesDB).filter(CodesDB.store_id == None).offset(offset).limit(limit).all()
+    elif onlyBusy:
+        codes = db.query(CodesDB).filter(CodesDB.store_id != None).offset(offset).limit(limit).all()
+    else:
+        codes = db.query(CodesDB).offset(offset).limit(limit).all()
+    return {
+        "codes": codes,
+        "offset": offset,
+        "limit": limit,
+    }
+
+@app.get("/crm/get-stores")
+async def get_stores(offset: int = 0, limit: int = 10, admin: CrmUsersDB = Depends(get_current_crm_admin),  db: Session = Depends(get_db)):
+    stores = db.query(StoreDB).offset(offset).limit(limit).all()
+    return {
+        "stores": stores,
+        "offset": offset,
+        "limit": limit,
     }

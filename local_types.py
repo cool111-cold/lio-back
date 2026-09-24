@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 class Sale(BaseModel):
     name: str
@@ -47,3 +47,13 @@ class Store(BaseModel):
     title: str
     subtitle: str
     image: str
+
+class CrmUser(BaseModel):
+    login: str
+    password: str
+    status: Literal["user", "admin"] = "user"
+
+class CrmUserUpdate(BaseModel):
+    login: Optional[str] = None
+    password: Optional[str] = None
+    status: Optional[Literal["user", "admin"]] = None
