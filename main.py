@@ -5,7 +5,7 @@ from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
 from pip._internal.models.link import Link
 
-from database import SessionLocal, ClientsDB, LinksDB, StoreDB, BaseLinks, CodesDB, CrmUsersDB
+from database import SessionLocal, ClientsDB, LinksDB, StoreDB, BaseLinks, CodesDB, CrmUsersDB, StylesDB
 from sqlalchemy.orm import Session
 from local_types import Client, ClientLogin, Store, CrmUser, CrmUserUpdate
 from auth import (
@@ -113,6 +113,7 @@ async def get_links(store_id: int, db: Session = Depends(get_db)):
     store = db.get(StoreDB, store_id)
     if store is None:
         raise HTTPException(status_code=404, detail="Store not found")
+    style = db.query(StylesDB).filter(StylesDB.store_id == store_id).first()
     links = db.query(LinksDB).filter(LinksDB.store_id == store_id).all()
     return {
         "id": store.id,
@@ -120,6 +121,26 @@ async def get_links(store_id: int, db: Session = Depends(get_db)):
         "subtitle": store.subtitle,
         "image": store.image,
         "links": links,
+        "style": style.style if style is not None else "default",
+    }
+
+@app.post("/update-style")
+async def update_style(store_id: int, new_style: str, client_id: int = Depends(get_current_client_id), db: Session = Depends(get_db)):
+    store = db.get(StoreDB, store_id)
+    if store is None:
+        raise HTTPException(status_code=404, detail="Store not found")
+    if client_id != store.client_id:
+        raise HTTPException(status_code=403, detail="Not allowed")
+
+    style = db.query(StylesDB).filter(StylesDB.store_id == store_id).first()
+    if style is None:
+        db.add(StylesDB(store_id=store_id, style=new_style))
+    else:
+        style.style = new_style
+    db.commit()
+
+    return {
+        "message": "Style updated",
     }
 
 @app.post("/create-link")
@@ -318,6 +339,7 @@ async def delete_store(store_id: int, client_id: int = Depends(get_current_clien
     if store.client_id != client_id:
         raise HTTPException(status_code=403, detail="Not authorized to delete this store")
     old_image = store.image
+    db.query(StylesDB).filter(StylesDB.store_id == store_id).delete()
     db.delete(store)
     db.commit()
     delete_uploaded_file(old_image)

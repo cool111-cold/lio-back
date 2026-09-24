@@ -55,5 +55,11 @@ class CrmUsersDB(Base):
     password = Column(String)
     status = Column(String, default="user")
 
+class StylesDB(Base):
+    __tablename__ = "styles"
+    id = Column(Integer, primary_key=True)
+    store_id = Column(Integer, nullable=True)
+    style = Column(String)
+
 
 Base.metadata.create_all(bind=engine)
