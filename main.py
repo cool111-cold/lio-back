@@ -20,6 +20,7 @@ import secrets
 import os
 import uuid
 import mimetypes
+import shutil
 
 #  source .venv/bin/activate
 # uvicorn api:app --no-access-log --loop uvloop --http httptools
@@ -69,6 +70,17 @@ def save_image(image: UploadFile) -> str:
         if os.path.isfile(path):
             os.remove(path)
         raise
+    return f"/uploads/{filename}"
+
+def copy_uploaded_file(url: Optional[str]) -> Optional[str]:
+    # Копия нужна, чтобы удаление одной записи не удалило файл у другой
+    if not url or not url.startswith("/uploads/") or url == DEFAULT_STORE_IMAGE:
+        return url
+    src = os.path.join(UPLOAD_DIR, os.path.basename(url))
+    if not os.path.isfile(src):
+        return url
+    filename = f"{uuid.uuid4().hex}{os.path.splitext(src)[1]}"
+    shutil.copyfile(src, os.path.join(UPLOAD_DIR, filename))
     return f"/uploads/{filename}"
 
 def delete_uploaded_file(url: Optional[str]):
@@ -170,7 +182,7 @@ async def create_link(
         new_link = LinksDB(
             icon=base.src,
             link=link,
-            label=base.label,
+            label=label if label is not None else (base.label if base is not None else parsed_url.netloc),
             store_id=store.id,
         )
     else:
@@ -268,10 +280,25 @@ async def create_store(store: Optional[Store] = None, reference_id: Optional[int
         new_store = StoreDB(
             title=old_store.title,
             subtitle=old_store.subtitle,
-            image=old_store.image,
+            image=copy_uploaded_file(old_store.image),
             client_id=client_id,
             isMain=False,
         )
+        db.add(new_store)
+        db.flush()
+
+        old_links = db.query(LinksDB).filter(LinksDB.store_id == old_store.id).all()
+        for old_link in old_links:
+            db.add(LinksDB(
+                icon=copy_uploaded_file(old_link.icon),
+                link=old_link.link,
+                label=old_link.label,
+                store_id=new_store.id,
+            ))
+
+        old_style = db.query(StylesDB).filter(StylesDB.store_id == old_store.id).first()
+        if old_style is not None and old_style.style != "default":
+            db.add(StylesDB(store_id=new_store.id, style=old_style.style))
     db.add(new_store)
     db.commit()
     db.refresh(new_store)
